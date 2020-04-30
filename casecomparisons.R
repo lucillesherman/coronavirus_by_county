@@ -1,0 +1,152 @@
+library(tidyverse)
+library(janitor)
+library(googlesheets4)
+library(rvest)
+library(tigris)
+
+### BEFORE RUNNING THIS FILE, MANUALLY CHANGE *DATE ANNOUNCED* in cases & deaths
+### AND MANUALLY CHANGE RANGE in cases & deaths
+
+# enter your email here 
+sheets_auth(email = "lsherman@newsobserver.com")
+
+# pull the sheet down to your machine
+county_counts <- read_sheet("https://docs.google.com/spreadsheets/d/1uZK6NxHffsoyr8Vkt4aj-RE7JxwnNkqKXCySN2bK8R8/edit#gid=773363602", sheet="NC", skip = 2) %>% 
+  select(Case, State, County, State, `Date announced`, `Confirmed by NCDHHS`) %>% # only grabbing columns i need
+  clean_names() %>% # reformatting column names
+  filter(case > 0) #filtering to only grab cases and not empty rows of data
+
+# save this sheet in its original form in case anything gets messed up 
+# don't forget to create a folder called "n_o_counts_output" in your current working directory before you run this
+# write_csv(county_counts, file.path("n_o_counts_output", paste0(Sys.time(), "no_cases", ".csv")))
+
+# confirmed <- county_counts %>%
+#   count(county, confirmed_by_ncdhhs)
+
+# count the number of cases per county
+sums <- county_counts %>% 
+  count(county, state) %>% 
+  rename(n_o_cases = "n") %>% 
+  select(county, n_o_cases) %>% 
+  mutate(n_o_cases = as.numeric(n_o_cases))
+
+# scrape the dhhs website
+url <- "https://www.ncdhhs.gov/divisions/public-health/covid19/covid-19-nc-case-count#by-counties"
+
+page <- read_html(url)
+
+# grab all tables on the page
+dhhstables <- html_table(page, fill = TRUE)
+
+# grab the county totals
+dhhs_nums <- dhhstables[[4]] %>% 
+  clean_names() %>% 
+  mutate(county = str_replace(county, " County", "")) %>% 
+  mutate(laboratory_confirmed_cases = str_replace(laboratory_confirmed_cases, ",", "")) %>% 
+  rename(dhhs_cases = "laboratory_confirmed_cases") %>% 
+  mutate(dhhs_cases = as.numeric(dhhs_cases))
+
+# sum(dhhs_nums$dhhs_cases)
+
+# pulls in all counties so we aren't just pulling from our list and theirs 
+all <- fips_codes %>% 
+  filter(state == "NC") %>% 
+  mutate(county = str_replace(county, " County", ""))
+
+# joins so we also include counties with no cases
+allcounties <- right_join(dhhs_nums, all, by = "county") %>% 
+  select(county, dhhs_cases, deaths)
+
+# join dhhs numbers + no case counties with ours
+case_compare <- right_join(sums, allcounties, by = "county") %>% 
+  select(-deaths) %>% 
+  mutate(n_o_cases = str_replace_na(n_o_cases, replacement = "0")) %>% 
+  mutate(n_o_cases = as.double(n_o_cases)) %>% 
+  mutate(case_difference = n_o_cases - dhhs_cases) %>% 
+  arrange(county)
+  
+# filter for all the cases that we don't have
+case_difference <- case_compare %>% 
+  filter(case_difference < 0) %>% 
+  select(county, case_difference) %>% 
+  mutate(case_difference = abs(case_difference))
+
+# what counties do we have more cases than dhhs
+# morethan <- case_compare %>%
+#   filter(case_difference > 0)
+
+# grab current date to add to "date announced"
+# time <- format(Sys.Date(), "%m/%d/%Y")
+
+# create a new row for each case we don't have
+#### MANUALLY ADD TODAY'S DATE
+case_difference_paste <- case_difference %>% 
+  group_by(county) %>%
+  complete(case_difference = full_seq(1:case_difference, 1)) %>% 
+  select(county) %>% 
+  mutate(date_announced = "4/30/2020") %>% 
+  mutate(source_of_announcement = "DHHS") %>% 
+  mutate(confirmed = "Yes")
+
+# grab the spreadsheet so you can write to it
+cases <- gs4_get("https://docs.google.com/spreadsheets/d/1uZK6NxHffsoyr8Vkt4aj-RE7JxwnNkqKXCySN2bK8R8/edit#gid=773363602")
+
+#### VERY IMPORTANT. BEFORE YOU RUN THIS, CHANGE THE RANGE 
+# cases %>%
+#   range_write(case_difference_paste, sheet = "NC", col_names = F, range = "C9909")
+
+# export
+# write_csv(case_difference_paste, file.path("n_o_counts_output", "case_difference.csv"))
+
+# make sure we've changed all the cases to confirmed
+# confirmed %>% 
+#   filter(confirmed_by_ncdhhs == "Yes") %>% 
+#   left_join(dhhs_nums, by = "county") %>% 
+#   mutate(diff = n - dhhs_cases) %>% 
+#   filter(diff > 0)
+
+# import deaths spreadsheet
+deaths <- read_sheet("https://docs.google.com/spreadsheets/d/1uZK6NxHffsoyr8Vkt4aj-RE7JxwnNkqKXCySN2bK8R8/edit#gid=773363602", sheet="NC Deaths") %>% 
+  clean_names() %>% 
+  select(case, name, county, date_announced, source, dhhs_confirmed, notes)
+
+# save output in case anything breaks
+# write_csv(deaths, file.path("n_o_counts_output", paste0(Sys.time(), "no_deaths", ".csv")))
+
+# count deaths by county
+death_sum <- deaths %>% 
+  count(county) %>% 
+  rename(n_o_count = "n")
+
+# compare our death count to dhhs
+death_compare <- right_join(death_sum, allcounties, by = "county") %>% 
+  select(county, deaths, n_o_count) %>% 
+  mutate(deaths = str_replace_na(deaths, replacement = "0")) %>% 
+  mutate(deaths = as.double(deaths)) %>% 
+  mutate(n_o_count = as.double(n_o_count)) %>% 
+  mutate(death_diff = n_o_count - deaths)
+
+# filter for cases we're missing 
+deaths_difference <- death_compare %>% 
+  filter(death_diff < 0) %>% 
+  mutate(death_diff = abs(death_diff))
+
+# where do we have more deaths than dhhs?
+# death_compare %>%
+#   filter(death_diff > 0)
+
+# create new row for each case we don't have
+#### MANUALLY ADD TODAY'S DATE
+death_diff_compare <- deaths_difference %>% 
+  group_by(county) %>%
+  complete(death_diff = full_seq(1:death_diff, 1)) %>% 
+  select(county) %>% 
+  mutate(date_announced = "4/30/2020") %>% 
+  mutate(source_of_announcement = "DHHS")
+
+#### VERY IMPORTANT. BEFORE YOU RUN THIS, CHANGE THE RANGE 
+# cases %>%
+#   range_write(death_diff_compare, sheet = "NC Deaths", col_names = F, range = "C368")
+
+# export
+# write_csv(death_diff_compare, file.path("n_o_counts_output", "deaths_difference.csv"))
