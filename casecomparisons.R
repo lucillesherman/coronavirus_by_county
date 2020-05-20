@@ -8,7 +8,7 @@ library(tigris)
 ### AND MANUALLY CHANGE RANGE in cases & deaths
 
 # enter your email here 
-sheets_auth(email = "lsherman@newsobserver.com")
+gs4_auth(email = "lsherman@newsobserver.com")
 
 # pull the sheet down to your machine
 county_counts <- read_sheet("https://docs.google.com/spreadsheets/d/1uZK6NxHffsoyr8Vkt4aj-RE7JxwnNkqKXCySN2bK8R8/edit#gid=773363602", sheet="NC", skip = 2) %>% 
@@ -30,21 +30,11 @@ sums <- county_counts %>%
   select(county, n_o_cases) %>% 
   mutate(n_o_cases = as.numeric(n_o_cases))
 
-# scrape the dhhs website
-url <- "https://www.ncdhhs.gov/divisions/public-health/covid19/covid-19-nc-case-count#by-counties"
-
-page <- read_html(url)
-
-# grab all tables on the page
-dhhstables <- html_table(page, fill = TRUE)
-
-# grab the county totals
-dhhs_nums <- dhhstables[[4]] %>% 
+# after converting dhhs data to csv, import
+dhhs_nums <- read_csv("DHHS county case count 5-19.csv") %>% # change the name of the csv you grab here
   clean_names() %>% 
-  mutate(county = str_replace(county, " County", "")) %>% 
-  mutate(laboratory_confirmed_cases = str_replace(laboratory_confirmed_cases, ",", "")) %>% 
-  rename(dhhs_cases = "laboratory_confirmed_cases") %>% 
-  mutate(dhhs_cases = as.numeric(dhhs_cases))
+  rename(dhhs_cases = "cases") %>% 
+  rename(dhhs_deaths = "deaths")
 
 # sum(dhhs_nums$dhhs_cases)
 
@@ -55,11 +45,11 @@ all <- fips_codes %>%
 
 # joins so we also include counties with no cases
 allcounties <- right_join(dhhs_nums, all, by = "county") %>% 
-  select(county, dhhs_cases, deaths)
+  select(county, dhhs_cases, dhhs_deaths)
 
 # join dhhs numbers + no case counties with ours
 case_compare <- right_join(sums, allcounties, by = "county") %>% 
-  select(-deaths) %>% 
+  select(-dhhs_deaths) %>% 
   mutate(n_o_cases = str_replace_na(n_o_cases, replacement = "0")) %>% 
   mutate(n_o_cases = as.double(n_o_cases)) %>% 
   mutate(case_difference = n_o_cases - dhhs_cases) %>% 
@@ -84,7 +74,7 @@ case_difference_paste <- case_difference %>%
   group_by(county) %>%
   complete(case_difference = full_seq(1:case_difference, 1)) %>% 
   select(county) %>% 
-  mutate(date_announced = "4/30/2020") %>% 
+  mutate(date_announced = "5/20/2020") %>% 
   mutate(source_of_announcement = "DHHS") %>% 
   mutate(confirmed = "Yes")
 
@@ -92,8 +82,8 @@ case_difference_paste <- case_difference %>%
 cases <- gs4_get("https://docs.google.com/spreadsheets/d/1uZK6NxHffsoyr8Vkt4aj-RE7JxwnNkqKXCySN2bK8R8/edit#gid=773363602")
 
 #### VERY IMPORTANT. BEFORE YOU RUN THIS, CHANGE THE RANGE 
-# cases %>%
-#   range_write(case_difference_paste, sheet = "NC", col_names = F, range = "C9909")
+cases %>%
+  range_write(case_difference_paste, sheet = "NC", col_names = F, range = "C19319")
 
 # export
 # write_csv(case_difference_paste, file.path("n_o_counts_output", "case_difference.csv"))
@@ -120,11 +110,13 @@ death_sum <- deaths %>%
 
 # compare our death count to dhhs
 death_compare <- right_join(death_sum, allcounties, by = "county") %>% 
-  select(county, deaths, n_o_count) %>% 
-  mutate(deaths = str_replace_na(deaths, replacement = "0")) %>% 
-  mutate(deaths = as.double(deaths)) %>% 
+  select(county, dhhs_deaths, n_o_count) %>% 
+  mutate(dhhs_deaths = str_replace_na(dhhs_deaths, replacement = "0")) %>% 
+  mutate(n_o_count = str_replace_na(n_o_count, replace = "0")) %>% 
+  mutate(dhhs_deaths = as.double(dhhs_deaths)) %>% 
   mutate(n_o_count = as.double(n_o_count)) %>% 
-  mutate(death_diff = n_o_count - deaths)
+  mutate(n_o_count = as.double(n_o_count)) %>% 
+  mutate(death_diff = n_o_count - dhhs_deaths)
 
 # filter for cases we're missing 
 deaths_difference <- death_compare %>% 
@@ -141,12 +133,12 @@ death_diff_compare <- deaths_difference %>%
   group_by(county) %>%
   complete(death_diff = full_seq(1:death_diff, 1)) %>% 
   select(county) %>% 
-  mutate(date_announced = "4/30/2020") %>% 
+  mutate(date_announced = "5/19/2020") %>% 
   mutate(source_of_announcement = "DHHS")
 
 #### VERY IMPORTANT. BEFORE YOU RUN THIS, CHANGE THE RANGE 
-# cases %>%
-#   range_write(death_diff_compare, sheet = "NC Deaths", col_names = F, range = "C368")
+cases %>%
+  range_write(death_diff_compare, sheet = "NC Deaths", col_names = F, range = "C698")
 
 # export
 # write_csv(death_diff_compare, file.path("n_o_counts_output", "deaths_difference.csv"))
