@@ -1,6 +1,7 @@
 library(tidyverse)
 library(pdftools)
 
+# change name
 county_counts <- pdf_text("DHHS county case count 6-7.pdf") %>% 
   readr::read_lines()
 df <- county_counts[c(4:48, 63:106, 115:125)] %>% 
@@ -16,4 +17,5 @@ clean_df <- clean_df %>%
   rename(cases = "V2") %>% 
   rename(deaths = "V3")
 
-     
+# change date
+write_csv(clean_df, "DHHS county case count 6-7.csv")
